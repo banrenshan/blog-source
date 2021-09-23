@@ -4,6 +4,8 @@ title: jvm
 date: 2021-09-22 19:01:40
 tags:
  - jvm
+categories:
+ - java
 ---
 
 
@@ -215,6 +217,59 @@ Unsafe可以操作直接内存，控制内存的分配和释放，基于此，�
     }
 ```
 
+> 细心的读者，可能注意到了，在DirectByteBuffer实例创建的时候，分配内存之前调用了`Bits.reserveMemory`方法，如果分配失败调用了`Bits.unreserveMemory`，同时在Deallocator释放完直接内存的时候，也调用了`Bits.unreserveMemory`方法。这两个方法，主要是记录jdk已经使用的直接内存的数量，当分配直接内存时，需要进行增加，当释放时，需要减少，源码如下：
+>
+> ```java
+> static void reserveMemory(long size, int cap) {
+>     //如果直接有足够多的直接内存可以用，直接增加直接内存引用的计数
+>     synchronized (Bits.class) {
+>         if (!memoryLimitSet && VM.isBooted()) {
+>             maxMemory = VM.maxDirectMemory();
+>             memoryLimitSet = true;
+>         }
+>         // -XX:MaxDirectMemorySize limits the total capacity rather than the
+>         // actual memory usage, which will differ when buffers are page
+>         // aligned.
+>         if (cap <= maxMemory - totalCapacity) {//维护已经使用的直接内存的数量
+>             reservedMemory += size;
+>             totalCapacity += cap;
+>             count++;
+>             return;
+>         }
+>     }
+>    //如果没有有足够多的直接内存可以用，先进行垃圾回收
+>     System.gc();
+>     try {
+>         Thread.sleep(100);//休眠100秒，等待垃圾回收完成
+>     } catch (InterruptedException x) {
+>         // Restore interrupt status
+>         Thread.currentThread().interrupt();
+>     }
+>     synchronized (Bits.class) {//休眠100毫秒后，增加直接内存引用的计数
+>         if (totalCapacity + cap > maxMemory)
+>             throw new OutOfMemoryError("Direct buffer memory");
+>         reservedMemory += size;
+>         totalCapacity += cap;
+>         count++;
+>     } 
+> }
+> //释放内存时，减少引用直接内存的计数
+> static synchronized void unreserveMemory(long size, int cap) {
+>     if (reservedMemory > 0) {
+>         reservedMemory -= size;
+>         totalCapacity -= cap;
+>         count--;
+>         assert (reservedMemory > -1);
+>     }
+> }
+> ```
+>
+> 通过上面代码的分析，我们事实上可以认为`Bits`类是直接内存的分配担保，当有足够的直接内存可以用时，增加直接内存应用计数，否则，调用System.gc，进行垃圾回收，需要注意的是，`System.gc`只会回收堆内存中的对象，但是我们前面已经讲过，DirectByteBuffer对象被回收时，那么其引用的直接内存也会被回收，试想现在刚好有其他的DirectByteBuffer可以被回收，那么其被回收的直接内存就可以用于本次DirectByteBuffer直接的内存的分配
+
+
+
+DirectByteBuffer本身是一个Java对象，其是位于堆内存中的，JDK的GC机制可以自动帮我们回收，但是其申请的直接内存，不在GC范围之内，无法自动回收。好在JDK提供了一种机制，可以为堆内存对象注册一个钩子函数(其实就是实现Runnable接口的子类)，当堆内存对象被GC回收的时候，会回调run方法，我们可以在这个方法中执行释放DirectByteBuffer引用的直接内存，即在run方法中调用Unsafe 的`freeMemory` 方法。注册是通过sun.misc.Cleaner类来实现的
+
 Cleaner类继承PhantomReference（虚引用），垃圾回收器在回收ByteBuffer的引用时，触发虚引用的clean方法，该方法会调用Deallocator的run方法，执行清理直接内存的操作。
 
 Deallocator实现了Runnable接口，如下面代码
@@ -253,7 +308,16 @@ Deallocator实现了Runnable接口，如下面代码
 
 
 
-我们再来看示例2，代码中调用了 `System.gc()` 函数，该函数会告诉jvm进行full gc(只是告诉，jvm决定最终是否执行)，但是生产上，我们通常开启`-XX:+DisableExplicitGC` 参数来禁用这种显示GC。
+我们再来看示例2，代码中调用了 `System.gc()` 函数，该函数会告诉jvm进行full gc(只是告诉，jvm决定最终是否执行)，但是生产上，我们通常开启`-XX:+DisableExplicitGC` 参数来禁用这种显示GC。但是这样就会出现直接内存长时间得不到释放的问题，导致系统内存告急的情况，道理很明显，因为直接内存的释放与获取比堆内存更加耗时，每次创建DirectByteBuffer实例分配直接内存的时候，都调用System.gc，可以让已经使用完的DirectByteBuffer得到及时的回收。
+
+虽然System.gc只是建议JVM去垃圾回收，可能JVM并不会立即回收，但是频繁的建议，JVM总不会视而不见。
+
+不过，这并不是绝对的，因为System.gc导致的是FullGC，可能会暂停用户线程，也就是JVM不能继续响应用户的请求，对于一些要求延时比较短的应用，是不希望JVM频繁的进行FullGC的。
+所以笔者的建议是：禁用System.gc，调大最大可以使用的直接内存:
+
+```shell
+-XX:+DisableExplicitGC -XX:MaxDirectMemorySize=256M
+```
 
 ### 示例3:直接内存溢出
 

@@ -341,3 +341,310 @@ public class DirectMemoryTest4 {
 Exception in thread "main" java.lang.OutOfMemoryError: Direct buffer memory
 ```
 
+# 垃圾回收
+
+如何判定垃圾：
+
+* 引用计数法
+
+* 可达性分析
+
+
+
+## 引用
+
+### 概述
+
+![image-20210923142348355](images/jvm/image-20210923142348355.png)
+
+
+
+
+
+* SoftReference代表软引用对象，垃圾回收器会根据内存需求酌情回收软引用指向的对象。普通的GC并不会回收软引用，只有在即将OOM的时候(也就是最后一次Full GC)如果被引用的对象只有SoftReference指向的引用，才会回收。
+
+* WeakReference代表弱引用对象，当发生GC时，如果被引用的对象只有WeakReference指向的引用，就会被回收。WeakHashMap,ThreadLocalMap
+
+* PhantomReference代表虚引用对象，其是一种特殊的引用类型，不能通过虚引用获取到其关联的对象，但当GC时如果其引用的对象被回收，程序可以感知这个事件，这样我们可以做相应的处理。ByteBuffer
+
+* 最后就是最常见强引用对象，也就是通常我们new出来的对象。
+
+  
+
+在继续介绍Reference相关类的源码前，先来简单的看一下GC如何决定一个对象是否可被回收。其基本思路是从GC Root开始向下搜索，如果对象与GC Root之间存在引用链，则对象是可达的，GC会根据是否可到达与可到达性决定对象是否可以被回收。而对象的可达性与引用类型密切相关，对象的可到达性可分为5种。
+
+- 强可到达，如果从GC Root搜索后，发现对象与GC Root之间存在强引用链则为强可到达。强引用链即有强引用对象，引用了该对象。
+- 软可到达，如果从GC Root搜索后，发现对象与GC Root之间不存在强引用链，但存在软引用链，则为软可到达。软引用链即有软引用对象，引用了该对象。
+- 弱可到达，如果从GC Root搜索后，发现对象与GC Root之间不存在强引用链与软引用链，但有弱引用链，则为弱可到达。弱引用链即有弱引用对象，引用了该对象。
+- 虚可到达，如果从GC Root搜索后，发现对象与GC Root之间只存在虚引用链则为虚可到达。虚引用链即有虚引用对象，引用了该对象。
+- 不可达，如果从GC Root搜索后，找不到对象与GC Root之间的引用链，则为不可到达。
+
+![img](images/jvm/p-1024x463.jpeg)
+
+
+
+* ObjectA为强可到达
+* ObjectB也为强可到达，虽然ObjectB对象被SoftReference ObjcetE 引用但由于其还被ObjectA引用所以为强可到达;
+* ObjectC和ObjectD为弱引用达到，虽然ObjectD对象被PhantomReference ObjcetG引用但由于其还被ObjectC引用，而ObjectC又为弱引用达到，所以ObjectD为弱引用达到;
+* ObjectH与ObjectI是不可到达。
+
+引用链的强弱有关系依次是 强引用 > 软引用 > 弱引用 > 虚引用，如果有更强的引用关系存在，那么引用链可达性，将由更强的引用有关系决定。
+
+### Reference核心处理流程
+
+JVM在GC时如果当前对象只被Reference对象引用，JVM会根据Reference具体类型与堆内存的使用情况决定是否把对应的Reference对象加入到一个由Reference构成的pending链表上。
+
+如果能加入pending链表，JVM同时会通知ReferenceHandler线程进行处理。ReferenceHandler线程是在Reference类被初始化时调用的，其是一个守护进程并且拥有最高的优先级。Reference类静态初始化块代码如下:
+
+```java
+static {
+   //省略部分代码...
+   Thread handler = new ReferenceHandler(tg, "Reference Handler");
+   handler.setPriority(Thread.MAX_PRIORITY);
+   handler.setDaemon(true);
+   handler.start();
+   //省略部分代码...
+}
+```
+
+而ReferenceHandler线程内部的run方法会不断地从Reference构成的pending链表上获取Reference对象。
+
+如果能获取，则根据Reference的具体类型进行不同的处理，不能则调用wait方法等待GC回收对象处理pending链表的通知。ReferenceHandler线程run方法源码:
+
+```java
+public void run() {
+      while (true) {
+          tryHandlePending(true);
+      }
+  }
+
+static boolean tryHandlePending(boolean waitForNotify) {
+    Reference<Object> r;
+    Cleaner c;
+    try {
+        synchronized (lock) {
+            if (pending != null) {
+                r = pending;
+                //instanceof 可能会抛出OOME，所以在将r从pending链上断开前，做这个处理
+                c = r instanceof Cleaner ? (Cleaner) r : null;
+                //将r从pending链上断开
+                pending = r.discovered;
+                r.discovered = null;
+            } else {
+                //等待CG后的通知
+                if (waitForNotify) {
+                    lock.wait();
+                }
+                  //重试
+                return waitForNotify;
+            }
+        }
+    } catch (OutOfMemoryError x) {
+        //当抛出OOME时，放弃CPU的运行时间，这样有希望收回一些存活的引用并且GC能回收部分空间。
+      // 同时能避免频繁地自旋重试，导致连续的OOME异常
+        Thread.yield();
+        //重试
+        return true;
+    } catch (InterruptedException x) {
+        //重试
+        return true;
+    }
+    //如果是Cleaner类型的Reference调用其clean方法并退出。
+    if (c != null) {
+        c.clean();
+        return true;
+    }
+    ReferenceQueue<? super Object> q = r.queue;
+    //如果Reference有注册ReferenceQueue，则处理pending指向的Reference结点将其加入ReferenceQueue中
+    if (q != ReferenceQueue.NULL) q.enqueue(r);
+    return true;
+}
+```
+
+上面tryHandlePending方法中比较重要的点是c.clean()与q.enqueue(r)。Cleaner的clean方法用于完成清理工作，而ReferenceQueue是将被回收对象加入到对应的Reference列队中，等待其他线程的后继处理。Reference的核心处理流程可总结如下：
+
+![img](images/jvm/p-2.jpeg)
+
+### 引用有四种内部状态
+
+![image-20210923142237312](images/jvm/image-20210923142237312.png)
+
+
+
+
+
+* Active: 新创建Reference的实例其状态为Active。当GC检测到Reference引用的referent达到可变条件时，改变Reference的状态为Pending或Inactive。这个取决于创建Reference实例时是否注册过ReferenceQueue。注册过其状态会转换为Pending，同时GC会将其加入pending-Reference链表中，否则为转换为Inactive状态。
+
+* Pending: 代表Reference是pending-Reference链表的成员，等待ReferenceHandler线程调用Cleaner#clean或ReferenceQueue#enqueue操作。未注册过ReferenceQueue的实例不会达到这个状态
+
+* Enqueued: Reference实例成为其被创建时注册过的ReferenceQueue的成员，代表已入队列。当其从ReferenceQueue
+
+  中移除后，其状态会变为Inactive。
+
+* Inactive: 什么也不会做，一旦处理该状态，就不可再转换。
+
+我们来看Reference类的核心成员：
+
+```java
+public abstract class Reference<T> {
+    private T referent;
+    volatile ReferenceQueue<? super T> queue;
+    Reference next;
+    private transient Reference<T> discovered;
+    private static Reference.Lock lock = new Reference.Lock();
+    private static Reference<Object> pending = null;
+```
+
+* referent: Reference 引用的对象
+* queue: Reference注册的queue用于ReferenceHandler线程入队处理与用户线程取Reference处理
+* next: 可理解为注册的queue中的下一个结点的引用
+* discovered: 其由VM维护，取值会根据Reference不同状态发生改变
+   * 状态为active时，代表由GC维护的discovered-Reference链表的下个节点，如果是尾部则为当前实例本身
+   * 状态为pending时，代表pending-Reference的下个节点的引用。
+   * 否则为null
+* pending: pending-Reference 链表头指针，GC回收referent后会将Reference加pending-Reference链表。同时ReferenceHandler线程会获取pending指针，不为空时Cleaner.clean()或入列queue。pending-Reference会采用discovered引用接链表的下个节点。
+
+不同状态时，Reference对应的queue与成员next变量值(next可理解为ReferenceQueue中的下个结点的引用)如下:
+ * Active: queue为Reference实例被创建时注册的ReferenceQueue，如果没注册为Null。此时，next为null，Reference实例与queue真正产生关系。
+ * Pending: queue为Reference实例被创建时注册的ReferenceQueue。next为当前实例本身。
+ * Enqueued: queue为ReferenceQueue.ENQUEUED代表当前实例已入队列。next为queue中的下一实列结点，如果是queue尾部则为当前实例本身
+ * Inactive: queue为ReferenceQueue.NULL，当前实例已从queue中移除与queue无关联。next为当前实例本身。
+
+
+
+
+
+1. JVM在GC时如果当前对象只被Reference对象引用，JVM会根据Reference具体类型与堆内存的使用情况决定是否把对应的Reference对象加入到一个由Reference构成的pending链表上，如果能加入pending链表JVM同时会通知ReferenceHandler线程进行处理。
+2. ReferenceHandler线程收到通知后会调用Cleaner#clean或ReferenceQueue#enqueue方法进行处理。
+   * 如果引用当前对象的Reference类型为WeakReference且堆内存不足，那么JMV就会把WeakReference加入到pending-Reference链表上，然后ReferenceHandler线程收到通知后会异步地做入队列操作。而我们的应用程序中的线程便可以不断地去拉取ReferenceQueue中的元素来感知JMV的堆内存是否出现了不足的情况，最终达到根据堆内存的情况来做一些处理的操作。实际上WeakHashMap底层便是过通上述过程实现的，只不过实现细节上有所偏差，这个后面再分析（参考示例1）。
+   * 再来看看ReferenceHandler线程收到通知后可能会调用的另外一个类Cleaner的实现。Cleaner实现为PhantomReference类型的引用。当JVM GC时如果发现当前处理的对象只被PhantomReference类型对象引用，同之前说的一样其会将该Reference加pending-Reference链中上，只是ReferenceHandler线程在处理时如果PhantomReference类型实际类型又是Cleaner的话。其就是调用Cleaner.clean方法做清理逻辑处理。Cleaner实际是DirectByteBuffer分配的堆外内存收回的实现。
+
+### WeakHashMap
+
+```java
+//Entry继承了WeakReference, WeakReference引用的是Map的key
+ private static class Entry<K,V> extends WeakReference<Object> implements Map.Entry<K,V> {
+    V value;
+    final int hash;
+    Entry<K,V> next;
+    /**
+     * 创建Entry对象，上面分析过的ReferenceQueue，这个queue实际是WeakHashMap的成员变量，
+     * 创建WeakHashMap时其便被初始化 final ReferenceQueue<Object> queue = new ReferenceQueue<>()
+     */
+    Entry(Object key, V value,
+          ReferenceQueue<Object> queue,
+          int hash, Entry<K,V> next) {
+        super(key, queue);
+        this.value = value;
+        this.hash  = hash;
+        this.next  = next;
+    }
+    //省略部分原码...
+}
+```
+
+往WeakHashMap添加元素时，实际都会调用Entry的构造方法，也就是会创建一个WeakReference对象，这个对象的引用的是WeakHashMap刚加入的Key,而所有的WeakReference对象关联在同一个ReferenceQueue上。我们上面说过JVM在GC时，如果发现当前对象只有被WeakReference对象引用，那么会把其对应的WeakReference对象加入到pending-reference链表上，并通知ReferenceHandler线程处理。而ReferenceHandler线程收到通知后，对于WeakReference对象会调用ReferenceQueue#enqueue方法把他加入队列里面。现在我们只要关注queue里面的元素在WeakHashMap里面是在哪里被拿出去啦做了什么样的操作,最终能定位到WeakHashMap的expungeStaleEntries方法:
+
+```java
+private void expungeStaleEntries() {
+    //不断地从ReferenceQueue中取出，那些只有被WeakReference对象引用的对象的Reference
+    for (Object x; (x = queue.poll()) != null; ) {
+        synchronized (queue) {
+            //转为 entry 
+            Entry<K,V> e = (Entry<K,V>) x;
+            //计算其对应的桶的下标
+            int i = indexFor(e.hash, table.length);
+            //取出桶中元素
+            Entry<K,V> prev = table[i];
+            Entry<K,V> p = prev;
+            //桶中对应位置有元素，遍历桶链表所有元素
+            while (p != null) {
+                Entry<K,V> next = p.next;
+                //如果当前元素(也就是entry)与queue取出的一致，将entry从链表中去除 
+                if (p == e) {
+                    if (prev == e)
+                        table[i] = next;
+                    else
+                        prev.next = next;
+                    //清空entry对应的value
+                    e.value = null; // Help GC
+                    size--;
+                    break;
+                }
+                prev = p;
+                p = next;
+            }
+        }
+    }
+}
+```
+
+现在只看一下WeakHashMap哪些地方会调用expungeStaleEntries方法就知道什么时候WeakHashMap里面的Key变得软可达时我们就可以将其对应的Entry从WeakHashMap里面移除。直接调用有三个地方分别是getTable方法、size方法、resize方法。 getTable方法又被很多地方调用如get、containsKey、put、remove、containsValue、replaceAll。最终看下来，只要对WeakHashMap进行操作就行调用expungeStaleEntries方法。所有只要操作了WeakHashMap，没WeakHashMap里面被再用到的Key对应的Entry就会被清除。再来总结一下，为什么WeakHashMap适合作为内存敏感缓存的实现。当JVM 在GC时，如果发现WeakHashMap里面某些Key没地方在被引用啦(WeakReference除外)，JVM会将其对应的WeakReference对象加入到pending-reference链表上，并通知ReferenceHandler线程处理。而ReferenceHandler线程收到通知后将对应引用Key的WeakReference对象加入到 WeakHashMap内部的ReferenceQueue中，下次再对WeakHashMap做操作时，WeakHashMap内部会清除那些没有被引用的Key对应的Entry。这样就达到了每操作WeakHashMap时，自动的检索并清量没有被引用的Key对应的Entry的目地。
+
+### 示例1：弱引用使用
+
+```java
+package cn.zhao.jvm;
+
+import java.io.IOException;
+import java.lang.ref.Reference;
+import java.lang.ref.ReferenceQueue;
+import java.lang.ref.WeakReference;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * -Xmx5m
+ */
+public class WeakRefenceTest {
+
+    static final int _1MB = 1024 * 1024;
+
+    public static void main(String[] args) throws IOException {
+        List<WeakReference<byte[]>> list = new ArrayList<>();
+        ReferenceQueue<Object> queue = new ReferenceQueue<>();
+        for (int i = 0; i < 5; i++) {
+            byte[] bytes = new byte[_1MB];
+            list.add(new WeakReference<>(bytes, queue));
+            System.err.println(list.get(i).get());
+        }
+        System.err.println("查看引用是否被回收");
+        for (WeakReference<byte[]> weakReference : list) {
+            System.err.println(weakReference.get());
+        }
+
+        System.err.println("过滤被删除的元素");
+
+        Reference<?> item = queue.poll();
+        while (item != null) {
+            list.remove(item);
+            item = queue.poll();
+        }
+
+        for (WeakReference<byte[]> weakReference : list) {
+            System.err.println(weakReference.get());
+        }
+    }
+}
+
+```
+
+打印结果如下：
+
+```sh
+[B@1540e19d
+[B@677327b6
+[B@14ae5a5
+[B@7f31245a
+[B@6d6f6e28
+查看引用是否被回收
+null
+null
+null
+[B@7f31245a
+[B@6d6f6e28
+过滤被删除的元素
+[B@7f31245a
+[B@6d6f6e28
+```
+

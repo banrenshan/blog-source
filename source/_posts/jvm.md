@@ -648,3 +648,117 @@ null
 [B@6d6f6e28
 ```
 
+## JVM相关参数
+
+* -Xms10m:堆初始大小10m
+* -Xmx10m:堆最大大小,或者使用 -XX:MaxHeapSize=size
+* -Xmn：新生代大小，等于-XX:NewSize=size 和 -XX:MaxNewSize=size
+* -XX:SurvivorRatio= ratio：幸存区比例 ，假如新生代10m ,ratio 为8，则 eden区8M ,from和to 分别为1m
+* -XX:InitialSurvivorRatio=ratio: 幸存区比例初始设置，叠加-XX:+UseAdaptiveSizePolicy参数，jvm会动态调整新生代各区的比例
+* -XX:MaxTenuringThreshold=threshold：晋升阈值，从新生代晋升到老年代需要存活的次数。
+* -XX:+PrintTenuringDistribution： 打印晋升详情
+* -XX:+PrintGCDetails -verbose:gc： 打印gc详情
+* -XX:+ScavengeBeforeFullGC：FullGC前MinorGC
+
+## 垃圾回收算法
+
+* 标记清除
+
+* 标记整理
+
+* 复制
+
+
+
+我们知道java对象基本上都是在堆上分配（有特殊情况下，不在我们讨论的范围内）。小对象都是直接在Eden区域中分配。如果此时内存不够，就会发生young gc，如果释放之后还是内存不够，此时jvm会进行full gc。如果发生full gc之后内存还是不够，此时就会抛出“java.lang.OutOfMemoryError: Java heap space”。大对象jvm会直接在old 区域中申请，但是和小对象分配的原理类似。
+
+示例：垃圾回收过程演示
+
+`-Xms20m -Xmx20m -XX:+PrintGCDetails` 
+
+![image-20210923211341409](jvm/image-20210923211341409.png)
+
+![image-20210923212201113](jvm/image-20210923212201113.png)
+
+
+
+![image-20210923212232176](jvm/image-20210923212232176.png)
+
+
+
+示例2：非main线程内存溢出
+
+```java
+// -Xms20m -Xmx20m -XX:+PrintGCDetails    
+public static void main(String[] args) throws IOException, InterruptedException {
+        new Thread(() -> {
+            ArrayList<Object> objects = new ArrayList<>();
+            objects.add(new byte[_8MB]);
+            objects.add(new byte[_8MB]);
+        }).start();
+
+        Thread.sleep(1000);
+        System.err.println("子线程内存溢出了，主线程还活着");
+     //   Thread.sleep(1000);
+    //    System.gc();
+    }
+```
+
+打印如下：
+
+```sh
+[GC (Allocation Failure) [PSYoungGen: 4186K->496K(6144K)] 12378K->9104K(19968K), 0.0013497 secs] [Times: user=0.00 sys=0.00, real=0.00 secs] 
+[GC (Allocation Failure) [PSYoungGen: 496K->512K(6144K)] 9104K->9216K(19968K), 0.0008869 secs] [Times: user=0.16 sys=0.00, real=0.00 secs] 
+[Full GC (Allocation Failure) [PSYoungGen: 512K->0K(6144K)] [ParOldGen: 8704K->9056K(13824K)] 9216K->9056K(19968K), [Metaspace: 4377K->4377K(1056768K)], 0.0061404 secs] [Times: user=0.00 sys=0.00, real=0.01 secs] 
+[GC (Allocation Failure) [PSYoungGen: 0K->0K(6144K)] 9056K->9056K(19968K), 0.0007777 secs] [Times: user=0.00 sys=0.00, real=0.00 secs] 
+[Full GC (Allocation Failure) [PSYoungGen: 0K->0K(6144K)] [ParOldGen: 9056K->9000K(13824K)] 9056K->9000K(19968K), [Metaspace: 4377K->4371K(1056768K)], 0.0081402 secs] [Times: user=0.00 sys=0.00, real=0.01 secs] 
+Exception in thread "Thread-0" java.lang.OutOfMemoryError: Java heap space
+	at cn.zhao.jvm.GCTest2.lambda$main$0(GCTest2.java:24)
+	at cn.zhao.jvm.GCTest2$$Lambda$1/990368553.run(Unknown Source)
+	at java.lang.Thread.run(Thread.java:745)
+子线程内存溢出了，主线程还活着
+Heap
+ PSYoungGen      total 6144K, used 253K [0x00000000ff980000, 0x0000000100000000, 0x0000000100000000)
+  eden space 5632K, 4% used [0x00000000ff980000,0x00000000ff9bf758,0x00000000fff00000)
+  from space 512K, 0% used [0x00000000fff00000,0x00000000fff00000,0x00000000fff80000)
+  to   space 512K, 0% used [0x00000000fff80000,0x00000000fff80000,0x0000000100000000)
+ ParOldGen       total 13824K, used 9000K [0x00000000fec00000, 0x00000000ff980000, 0x00000000ff980000)
+  object space 13824K, 65% used [0x00000000fec00000,0x00000000ff4ca3b8,0x00000000ff980000)
+ Metaspace       used 4403K, capacity 4738K, committed 4992K, reserved 1056768K
+  class space    used 495K, capacity 559K, committed 640K, reserved 1048576K
+```
+
+old区8M,正好是list add的第一个8m，后面那个8m add的时候，发现内存不够，就抛出了内存溢出异常。
+
+打开上面的注释行，打印日志如下：
+
+```sh
+[GC (Allocation Failure) [PSYoungGen: 4186K->512K(6144K)] 12378K->9104K(19968K), 0.0010147 secs] [Times: user=0.00 sys=0.00, real=0.00 secs] 
+[GC (Allocation Failure) [PSYoungGen: 512K->512K(6144K)] 9104K->9176K(19968K), 0.0010400 secs] [Times: user=0.00 sys=0.00, real=0.00 secs] 
+[Full GC (Allocation Failure) [PSYoungGen: 512K->0K(6144K)] [ParOldGen: 8664K->9056K(13824K)] 9176K->9056K(19968K), [Metaspace: 4380K->4380K(1056768K)], 0.0073424 secs] [Times: user=0.00 sys=0.00, real=0.01 secs] 
+[GC (Allocation Failure) [PSYoungGen: 0K->0K(6144K)] 9056K->9056K(19968K), 0.0004508 secs] [Times: user=0.00 sys=0.00, real=0.00 secs] 
+[Full GC (Allocation Failure) [PSYoungGen: 0K->0K(6144K)] [ParOldGen: 9056K->9000K(13824K)] 9056K->9000K(19968K), [Metaspace: 4380K->4374K(1056768K)], 0.0088532 secs] [Times: user=0.02 sys=0.00, real=0.01 secs] 
+Exception in thread "Thread-0" java.lang.OutOfMemoryError: Java heap space
+	at cn.zhao.jvm.GCTest2.lambda$main$0(GCTest2.java:24)
+	at cn.zhao.jvm.GCTest2$$Lambda$1/990368553.run(Unknown Source)
+	at java.lang.Thread.run(Thread.java:745)
+子线程内存溢出了，主线程还活着
+[GC (System.gc()) [PSYoungGen: 215K->160K(6144K)] 9216K->9160K(19968K), 0.0017696 secs] [Times: user=0.00 sys=0.00, real=0.00 secs] 
+[Full GC (System.gc()) [PSYoungGen: 160K->0K(6144K)] [ParOldGen: 9000K->804K(13824K)] 9160K->804K(19968K), [Metaspace: 4399K->4399K(1056768K)], 0.0150618 secs] [Times: user=0.16 sys=0.00, real=0.02 secs] 
+Heap
+ PSYoungGen      total 6144K, used 169K [0x00000000ff980000, 0x0000000100000000, 0x0000000100000000)
+  eden space 5632K, 3% used [0x00000000ff980000,0x00000000ff9aa558,0x00000000fff00000)
+  from space 512K, 0% used [0x00000000fff80000,0x00000000fff80000,0x0000000100000000)
+  to   space 512K, 0% used [0x00000000fff00000,0x00000000fff00000,0x00000000fff80000)
+ ParOldGen       total 13824K, used 804K [0x00000000fec00000, 0x00000000ff980000, 0x00000000ff980000)
+  object space 13824K, 5% used [0x00000000fec00000,0x00000000fecc93c0,0x00000000ff980000)
+ Metaspace       used 4406K, capacity 4738K, committed 4992K, reserved 1056768K
+  class space    used 495K, capacity 559K, committed 640K, reserved 1048576K
+```
+
+发现内存溢出的线程之前占用的内存也释放了。
+
+
+
+## 垃圾回收器
+

@@ -539,6 +539,156 @@ drop trigger trigger_name
 show trigger
 ```
 
+# 事件
+
+## 概述
+
+自MySQL5.1.6起，增加了一个非常有特色的功能 - 事件调度器（Event Scheduler），可以用做定时执行某些特定任务（例如：删除记录、数据统计报告、数据备份等等），来取代原先只能由操作系统的计划任务来执行的工作。
+
+> 值得一提的是MySQL的事件调度器可以精确到每秒钟执行一个任务，而操作系统的计划任务（如：Linux的cron）只能精确到每分钟执行一次。对于一些对数据实时性要求比较高的应用（例如：股票、赔率、比分等）就非常适合。
+
+事件有时也可以称为临时触发器（temporal triggers），因为事件调度器是基于特定时间周期触发来执行某些任务，而触发器（Triggers）是基于某个表所产生的事件触发的，区别也就在这里。
+
+## 开启事件
+
+使用“事件”功能之前必须确保event_scheduler已开启：
+
+```shell
+mysql> SELECT @@event_scheduler; #方法一
++-------------------+
+| @@event_scheduler |
++-------------------+
+| OFF               |
++-------------------+
+1 row in set (0.00 sec)
+
+mysql> SHOW VARIABLES LIKE 'event%'; #方法一
++-----------------+-------+
+| Variable_name   | Value |
++-----------------+-------+
+| event_scheduler | OFF   |
++-----------------+-------+
+1 row in set (0.00 sec)
+```
+
+开启命令：
+
+```sql
+-- 开启功能命令：
+SET GLOBAL event_scheduler = 1;
+SET GLOBAL event_scheduler = ON;
+-- 关闭功能命令：
+SET GLOBAL event_scheduler = 0;
+SET GLOBAL event_scheduler = OFF;
+```
+
+通过命令开启当数据库重启后会自动关闭；永久生效需要将`event_scheduler=1`写到my.cnf配置文件中。
+
+## sql语法
+
+### 创建事件
+
+```sql
+CREATE EVENT [IFNOT EXISTS] event_name
+    　　 ON SCHEDULE schedule(调度时间设置)
+    　　 [ON COMPLETION [NOT] PRESERVE]
+    　　 [ENABLE | DISABLE | DISABLE ON SLAVE]
+    　　 [COMMENT 'comment']
+    　　 DO sql_statement;
+```
+
+* **ON COMPLETION [NOT] PRESERVE**: 配置事件执行完一次后的处理方式；当为on completion preserve 的时候,当event到期了,event会被disable,但是该event还是会存在; 当为on completion not preserve的时候,当event到期的时候,该event会被自动删除掉.
+* **ENABLE、DISABLE、DISABLE ON SLAVE**:ENABLE表示该事件是开启的，也就是调度器检查事件是否必选调用；DISABLE表示该事件是关闭的，也就是事件的声明存储到目录中，但是调度器不会检查它是否应该调用；DISABLE ON SLAVE表示事件在从机中是关闭的。如果不指定这三个选择中的任意一个，则在一个事件创建之后，它立即变为活动的。
+* **DO event_body**: 用于指定事件启动时所要执行的代码。可以是任何有效的SQL语句、存储过程或者一个计划执行的事件。如果包含多条语句，可以使用BEGIN…END复合结构
+
+`schedule` 调度时间配置语法：调度时间配置包括`AT` 和 `EVERY`两种
+
+```sql
+AT timestamp [+ INTERVAL interval] ...
+  | EVERY interval
+    [STARTS timestamp [+ INTERVAL interval] ...]
+    [ENDS timestamp [+ INTERVAL interval] ...]
+
+
+-- INTERVAL中包含的时间单位如下:
+{YEAR | QUARTER | MONTH | DAY | HOUR | MINUTE |
+ WEEK | SECOND | YEAR_MONTH | DAY_HOUR | DAY_MINUTE |
+ DAY_SECOND | HOUR_MINUTE | HOUR_SECOND | MINUTE_SECOND}
+```
+
+示例1（某个时间点插入一条数据到表中）：
+
+```sql
+-- 事件执行完成之后就被删除了
+CREATE EVENT insert_to_indextest 
+	ON SCHEDULE AT TIMESTAMP '2021-09-14 10:04:00' 
+	DO
+		INSERT INTO index_test (id,`NAME`) VALUES(2,'event2');
+```
+
+示例2（当前时间之后1分钟再执行）
+
+```sql
+CREATE EVENT insert_to_indextest3 ON SCHEDULE AT  CURRENT_TIMESTAMP + INTERVAL 1 MINUTE 
+DO
+	INSERT INTO index_test (id, `NAME`)
+VALUES
+	(4, 'event4');
+```
+
+> 注意使用CURRENT_TIMESTAMP时，没有TIMESTAMP关键字
+
+示例3（每隔10秒插入一条数据）
+
+```sql
+CREATE EVENT test_every ON SCHEDULE EVERY 10 SECOND ON COMPLETION PRESERVE DO
+	INSERT INTO test
+VALUES
+	('aa');
+```
+
+### 修改
+
+修改语法几乎和创建语句一样：
+
+```sql
+ALTER EVENT event_name
+    　　 [ON SCHEDULE schedule]
+    　　 [rename TO new_NAME]
+    　　 [ON COMPLETION [NOT] PRESERVE]
+    　　 [COMMENT 'comment']
+    　　 [ENABLE | DISABLE]
+    　　 [DO sql_statement]
+```
+
+示例：
+
+```sql
+ALTER EVENT test_every ON SCHEDULE EVERY 10 SECOND DO
+	INSERT INTO test
+VALUES
+	('bb');
+-- 修改名称
+ALTER EVENT test_every rename TO test_every_new ;
+```
+
+### 禁用事件
+
+```sql
+ALTER EVENT test_every_new DISABLE;
+ALTER EVENT test_every_new ENABLE;
+```
+
+### 删除
+
+```sql
+DROP EVENT [IF EXISTS] event_name
+```
+
+
+
+
+
 # mysql体系
 
 ![img](./mysql%E9%AB%98%E7%BA%A7/src=http%253A%252F%252Fseo-1255598498.file.myqcloud.com%252Ffull%252F05b627442aef5676dee67b33e8627c8782564b7d.jpg&refer=http%253A%252F%252Fseo-1255598498.file.myqcloud.com&app=2002&size=f9999,10000&q=a80&n=0&g=0n&fmt=jpeg)

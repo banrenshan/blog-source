@@ -174,11 +174,45 @@ spring:
 
 ## 负载均衡
 
+依赖：`org.springframework.cloud:spring-cloud-starter-loadbalancer`
+
+修改某个客户端的负载配置：
+
+```java
+@Configuration
+@LoadBalancerClient(value = "stores", configuration = CustomLoadBalancerConfiguration.class)
+public class MyConfiguration {
+
+    @Bean
+    @LoadBalanced
+    public WebClient.Builder loadBalancedWebClientBuilder() {
+        return WebClient.builder();
+    }
+}
+```
+
+修改多个客户端的负载配置：
+
+```java
+@Configuration
+@LoadBalancerClients({@LoadBalancerClient(value = "stores", configuration = StoresLoadBalancerClientConfiguration.class), @LoadBalancerClient(value = "customers", configuration = CustomersLoadBalancerClientConfiguration.class)})
+public class MyConfiguration {
+
+    @Bean
+    @LoadBalanced
+    public WebClient.Builder loadBalancedWebClientBuilder() {
+        return WebClient.builder();
+    }
+}
+```
+
+
+
 ReactiveLoadBalancer接口定义负载均衡器，spring cloud实现了两种：轮询和随机。默认实现是RoundRobinLoadBalancer。
 
 ServiceInstanceListSupplier 接口定义获取服务实例信息，基于服务发现的`DiscoveryClientServiceInstanceListSupplier`，下面接受的其他均衡器都是委托DiscoveryClientServiceInstanceListSupplier来获取服务列表，然后做进一步处理。
 
-
+### 负载算法
 
 CachingServiceInstanceListSupplier：基于缓存的服务实例列表
 
@@ -294,3 +328,185 @@ public class CustomLoadBalancerConfiguration {
 }
 ```
 
+### 拦截请求
+
+您可以使用选定的 ServiceInstance 来转换负载均衡的 HTTP 请求。
+
+对于 RestTemplate，需要实现和定义 LoadBalancerRequestTransformer 如下：
+
+```java
+@Bean
+public LoadBalancerRequestTransformer transformer() {
+    return new LoadBalancerRequestTransformer() {
+        @Override
+        public HttpRequest transformRequest(HttpRequest request, ServiceInstance instance) {
+            return new HttpRequestWrapper(request) {
+                @Override
+                public HttpHeaders getHeaders() {
+                    HttpHeaders headers = new HttpHeaders();
+                    headers.putAll(super.getHeaders());
+                    headers.add("X-InstanceId", instance.getInstanceId());
+                    return headers;
+                }
+            };
+        }
+    };
+}
+```
+
+对于WebClient，需要实现和定义LoadBalancerClientRequestTransformer如下：
+
+```java
+@Bean
+public LoadBalancerClientRequestTransformer transformer() {
+    return new LoadBalancerClientRequestTransformer() {
+        @Override
+        public ClientRequest transformRequest(ClientRequest request, ServiceInstance instance) {
+            return ClientRequest.from(request)
+                    .header("X-InstanceId", instance.getInstanceId())
+                    .build();
+        }
+    };
+}
+```
+
+如果定义了多个转换器，它们将按照定义 Bean 的顺序应用。 或者，您可以使用 LoadBalancerRequestTransformer.DEFAULT_ORDER 或 LoadBalancerClientRequestTransformer.DEFAULT_ORDER 来指定顺序。
+
+### 生命周期方法
+
+LoadBalancerLifecycle bean 提供回调方法，名为 onStart(Request<RC> request)、onStartRequest(Request<RC> request, Response<T> lbResponse) 和 onComplete(CompletionContext<RES, T, RC> completionContext)，您应该实现这些方法 指定在负载平衡之前和之后应执行的操作。
+
+我们提供了一个名为 MicrometerStatsLoadBalancerLifecycle 的 LoadBalancerLifecycle bean，它使用 Micrometer 为负载平衡调用提供统计信息。
+
+为了将此 bean 添加到您的应用程序上下文中，请将 spring.cloud.loadbalancer.stats.micrometer.enabled 的值设置为 true 并使用 MeterRegistry（例如，通过将 Spring Boot Actuator 添加到您的项目中）。MicrometerStatsLoadBalancerLifecycle 在 MeterRegistry 中注册以下仪表：
+
+* loadbalancer.requests.active：允许您监控任何服务实例的当前活动请求数量的量表（服务实例数据可通过标签获得）；
+
+* loadbalancer.requests.success：一个计时器，用于测量已结束将响应传递给底层客户端的任何负载平衡请求的执行时间；
+
+* loadbalancer.requests.failed：一个计时器，用于测量任何以异常结束的负载平衡请求的执行时间；
+
+* loadbalancer.requests.discard：一个计数器，用于测量被丢弃的负载平衡请求的数量，即负载均衡器尚未检索到运行请求的服务实例的请求。
+
+### 客户端
+
+负载均衡帮助我们选定具体的实例，然后我们需要通过http的方式访问该示例，这个过程称为客户端调用。具体的客户端实现有RestTemplate，WebClient，openFeign等。
+
+#### RestTemplate
+
+```java
+@Configuration
+public class MyConfiguration {
+
+    @LoadBalanced
+    @Bean
+    RestTemplate restTemplate() {
+        return new RestTemplate();
+    }
+}
+
+public class MyClass {
+    @Autowired
+    private RestTemplate restTemplate;
+
+    public String doOtherStuff() {
+        String results = restTemplate.getForObject("http://stores/stores", String.class);
+        return results;
+    }
+}
+```
+
+#### WebClient 
+
+```java
+@Configuration
+public class MyConfiguration {
+
+    @Bean
+    @LoadBalanced
+    public WebClient.Builder loadBalancedWebClientBuilder() {
+        return WebClient.builder();
+    }
+}
+
+public class MyClass {
+    @Autowired
+    private WebClient.Builder webClientBuilder;
+
+    public Mono<String> doOtherStuff() {
+        return webClientBuilder.build().get().uri("http://stores/stores")
+                        .retrieve().bodyToMono(String.class);
+    }
+}
+```
+
+Spring Cloud Commons 提供了用于创建 Apache HTTP 客户端 (ApacheHttpClientFactory) 和 OK HTTP 客户端 (OkHttpClientFactory) 的 bean。 只有当 OK HTTP jar 位于类路径上时，才会创建 OkHttpClientFactory bean。 此外，Spring Cloud Commons 提供 bean 来创建两个客户端使用的连接管理器：
+
+* ApacheHttpClientConnectionManagerFactory 用于 Apache HTTP 客户端
+* OkHttpClientConnectionPoolFactory 用于 OK HTTP 客户端。 
+
+如果您想自定义如何在下游项目中创建 HTTP 客户端，您可以提供您自己的这些 bean 的实现。 
+
+此外，如果您提供类型为 HttpClientBuilder 或 OkHttpClient.Builder 的 bean，则默认工厂使用这些构建器作为构建的基础。 
+
+您还可以通过将 spring.cloud.httpclientfactories.apache.enabled 或 spring.cloud.httpclientfactories.ok.enabled 设置为 false 来禁用这些 bean 的创建。
+
+> RestTemplate和openfiegn以及其他都是使用这些http客户端发送请求的。RestTemplate和openfiegn地位相同，使用loadbancer选择服务示例，loadbancer使用DiscoveryClient获取所有的服务信息。但凡涉及http请求的，底层都使用http客户端。但是不能保证他们使用了同一个http客户端实例？？？
+
+### 失败重试
+
+负载均衡的 RestTemplate 可以配置为重试失败。 默认情况下，此逻辑被禁用。 您可以通过将 Spring Retry 添加到应用程序的类路径来启用它。 对于响 WebTestClient，您需要设置 `spring.cloud.loadbalancer.retry.enabled=true`。其他相关属性：
+
+* spring.cloud.loadbalancer.retry.maxRetriesOnSameServiceInstance - 指示应在同一个 ServiceInstance 上重试请求的次数（为每个选定的实例单独计数）
+
+* spring.cloud.loadbalancer.retry.maxRetriesOnNextServiceInstance - 指示应重试新选择的 ServiceInstance 请求的次数
+
+* spring.cloud.loadbalancer.retry.retryableStatusCodes - 始终重试失败请求的状态代码。
+
+
+
+对于反应式实现，您还可以设置： 
+
+- spring.cloud.loadbalancer.retry.backoff.minBackoff - 设置最小退避持续时间（默认为 5 毫秒） 
+
+* spring.cloud.loadbalancer.retry.backoff.maxBackoff - 设置 最大退避持续时间（默认情况下，最大长值毫秒）
+
+* spring.cloud.loadbalancer.retry.backoff.jitter - 设置用于计算每次调用的实际退避持续时间的抖动（默认情况下，0.5）。
+
+
+
+
+
+## 断路器
+
+org.springframework.cloud:spring-cloud-starter-circuitbreaker-resilience4j
+
+org.springframework.cloud:spring-cloud-starter-circuitbreaker-reactor-resilience4j
+
+
+
+支持的断路器实现：
+
+- [Resilience4J](https://github.com/resilience4j/resilience4j)
+- [Sentinel](https://github.com/alibaba/Sentinel)
+- [Spring Retry](https://github.com/spring-projects/spring-retry)
+
+要在您的代码中创建断路器，您可以使用 CircuitBreakerFactory API。 当您在类路径中包含 Spring Cloud Circuit Breaker starter 时，会自动为您创建一个实现此 API 的 bean。 以下示例显示了如何使用此 API 的简单示例：
+
+```java
+@Service
+public static class DemoControllerService {
+    private RestTemplate rest;
+    private CircuitBreakerFactory cbFactory;
+
+    public DemoControllerService(RestTemplate rest, CircuitBreakerFactory cbFactory) {
+        this.rest = rest;
+        this.cbFactory = cbFactory;
+    }
+
+    public String slow() {
+        return cbFactory.create("slow").run(() -> rest.getForObject("/slow", String.class), throwable -> "fallback");
+    }
+
+}
+```

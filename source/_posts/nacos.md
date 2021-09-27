@@ -1,3 +1,11 @@
+---
+title: nacos使用
+tags: 
+ - nacos
+categories:
+ - 微服务
+---
+
 # 安装nacos server
 
 [下载地址](https://github.com/alibaba/nacos/releases)

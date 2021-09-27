@@ -2,7 +2,10 @@
 title: spring-cloud-eureka
 date: 2021-09-26 13:33:46
 tags:	
-  - 服务发现
+ - 服务发现
+categories:
+ - 微服务
+
 ---
 
 # Eureka server

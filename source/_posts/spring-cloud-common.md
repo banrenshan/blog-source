@@ -1,3 +1,11 @@
+---
+title: spring cloud common
+tags: 
+ - spring cloud
+categories:
+ - 微服务
+---
+
 `spring Cloud`构建在`Spring Boot`之上，提供了两个基础库:`Spring Cloud Context`和`Spring Cloud Commons`。
 
 * `Spring Cloud Context`为`Spring Cloud`应用程序的ApplicationContext提供了实用程序和特殊服务，例如：引导上下文、加密、刷新范围和环境端点

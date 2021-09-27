@@ -1,3 +1,11 @@
+---
+title: spring cloud openfeign
+tags: 
+ - feign
+categories:
+ - 微服务
+---
+
 Feign是一个声明性的Web服务客户端。它使编写Web服务客户端变得更容易。要使用Feign，请创建一个接口并对其进行注释。它具有可插入的注释支持，包括Feign注释和JAX-RS注释。 Feign还支持可插拔编码器和解码器。Spring Cloud增加了对Spring MVC注释的支持，并使用了Spring Web中默认使用的相同HttpMessageConverters。 Spring Cloud集成了Ribbon和Eureka，在使用Feign时提供负载均衡的http客户端。
 
 ## 引入依赖

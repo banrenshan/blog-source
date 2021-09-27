@@ -1,3 +1,11 @@
+---
+title: gradle使用
+tags: 
+ - gradle
+categories:
+ - 工具
+---
+
 # 构建环境
 
 了解 Gradle 分三个阶段评估和执行构建脚本很重要：

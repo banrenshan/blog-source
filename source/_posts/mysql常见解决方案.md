@@ -1,3 +1,12 @@
+---
+title: mysql常见解决方案
+tags: 
+ - mysql
+categories:
+ - 方案
+ - 数据库
+---
+
 # 历史表迁移
 
 ## 概述

@@ -365,7 +365,7 @@ public void beforeSampleMethod(MyType param) {
 
 ## Introductions
 
-使被通知的对象实现给定的接口，并代表这些对象提供该接口的实现。
+使被通知的对象实现给定的接口，并提供该接口的实现。就是让代理类实现了新的接口。
 
 您可以使用@DeclareParents 注释进行introduction 。 此注释用于声明匹配类型具有新的父级。 例如：
 

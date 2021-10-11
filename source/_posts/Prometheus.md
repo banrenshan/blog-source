@@ -1,3 +1,11 @@
+---
+title: Prometheus 
+tags: 
+ - Prometheus 
+categories:
+ - 监控
+---
+
 # 概述
 
 开源的系统监控和告警系统。Prometheus 将其指标收集并存储为**时间序列数据**，即**指标信息**与记录它的时间戳一起存储，以及称为**标签**的可选键值对。

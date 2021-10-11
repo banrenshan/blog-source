@@ -1,3 +1,11 @@
+---
+title: Grafana 
+tags: 
+ - Grafana 
+categories:
+ - 监控
+---
+
 # 快速开始
 
 ## 添加数据源

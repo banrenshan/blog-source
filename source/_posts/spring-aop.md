@@ -1,3 +1,12 @@
+---
+title: spring-aop
+tags: 
+ - aop
+ - spring
+categories:
+ - spring
+---
+
 # AOP概念
 
 * Aspect：跨越多个类的关注点的模块化。`aspect` 由 `pointcount` 和 `advice` 组成, 它既包含了横切逻辑的定义, 也包括了连接点的定义. Spring AOP就是负责实施切面的框架, 它将切面所定义的横切逻辑织入到切面所指定的连接点中. AOP的工作重心在于如何将增强织入目标对象的连接点上, 这里包含两个工作:
@@ -103,7 +112,6 @@ private void anyOldTransfer() {} // the pointcut signature
 * @annotation：限制匹配连接点，匹配由指定注解所标注的方法
 
 > 由于 Spring 的 AOP 框架基于代理的特性，根据定义，目标对象内的调用不会被拦截（即直接调用）。对于 JDK 代理，只能拦截代理上的公共接口方法。使用 CGLIB，可以拦截代理上的公共和受保护方法
->
 
 您可以使用 `&&`、`||` 和 `！`来组合切入点表达式 。 您还可以按名称引用切入点表达式。 以下示例显示了三个切入点表达式：
 

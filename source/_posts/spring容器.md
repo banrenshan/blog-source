@@ -1,3 +1,13 @@
+---
+title: spring容器
+tags: 
+ - spring
+categories:
+ - spring
+---
+
+
+
 ## 容器和 Bean 介绍
 
 控制反转也叫依赖注入(DI)，这是一个过程。对象通过下面的方式，知道自己的依赖项：

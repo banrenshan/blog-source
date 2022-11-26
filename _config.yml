@@ -9,13 +9,13 @@ description: ''
 keywords:
 author: zzq
 language: zh-CN
-timezone: ''
+timezone: 'Asia/Shanghai'
 
 # URL
 ## Set your site url here. For example, if you use GitHub Page, set url as 'https://username.github.io/project'
-url: https://hanziqi.gitee.io
-root: /blog
-permalink: :year/:month/:day/:title/
+url: https://banrenshan.github.io
+root: /
+permalink: "/:year/:month/:day/:title/"
 permalink_defaults:
 pretty_urls:
   trailing_index: true # Set to false to remove trailing 'index.html' from permalinks
@@ -104,7 +104,7 @@ theme: ayer
 ## Docs: https://hexo.io/docs/one-command-deployment
 deploy:
   type: git
-  repository: https://gitee.com/hanziqi/blog.git
+  repository: https://github.com/banrenshan/banrenshan.github.io.git
   branch: master
 
 search:

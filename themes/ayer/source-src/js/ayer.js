@@ -201,8 +201,7 @@
       e = document,
       i = p,
       c = "".concat(
-        "https:" === e.location.protocol ? "https://" : "http://",
-        "sdk.51.la/js-sdk-pro.min.js"
+        "/js/js-sdk-pro.min.js"
       ),
       n = e.createElement("script"),
       r = e.getElementsByTagName("script")[0];
